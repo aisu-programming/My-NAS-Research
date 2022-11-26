@@ -1,0 +1,7 @@
+# Environment
+.vscode
+venv4*
+
+# Misc
+*.pyc
+*.png
