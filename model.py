@@ -1,11 +1,12 @@
-''' Libraries '''
+""" Libraries """
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 from dag_networkx import plot_DAG as imported_plot_DAG
 
 
-''' Functions '''
+""" Functions """
 def cycle_check(edges, input_amounts):
     # Run topological sort -> Success: no cycle / Failure: cycle exists
     input_amounts_copy = input_amounts.copy()
@@ -20,33 +21,40 @@ def cycle_check(edges, input_amounts):
 
 class Model(nn.Module):
     def __init__(self, node_num, max_depth, threshold_of_connection,
-                 max_number_of_connection, min_number_of_connection):
+                 max_number_of_connection, min_number_of_connection, output_path):
         super(Model, self).__init__()
 
         assert max_number_of_connection >= 1, "max_number_of_connection should >= 1"
         assert min_number_of_connection >= 1, "min_number_of_connection should >= 1"
 
         self.node_num = node_num
-        self.nodes : list[Node] = [ Node(node_num, max_depth)
-                                    for _ in range(node_num) ]
-        self.alphas = torch.rand(node_num*node_num)
+        self.nodes = torch.nn.ModuleList([
+            LinearNode(node_num, max_depth, first=True) if node_id == 0 else
+            LinearNode(node_num, max_depth,  last=True) if node_id == node_num-1 else
+            LinearNode(node_num, max_depth) for node_id in range(node_num) ])
+        alphas = torch.rand(node_num*node_num)
         for i in range(node_num):
-            self.alphas[i*node_num + i] = 0  # prevent node from linking to itself
-            self.alphas[i*node_num + 0] = 0  # Make first node (node_id=0) source
-            self.alphas[node_num*(node_num-1)+i] = 0  # Make last node (node_id=node_num-1) sink
+            alphas[i*node_num + i] = 0  # prevent node from linking to itself
+            alphas[i*node_num + 0] = 0  # Make first node (node_id=0) source
+            alphas[node_num*(node_num-1)+i] = 0  # Make last node (node_id=node_num-1) sink
+        self.alphas = torch.nn.parameter.Parameter(alphas)
         self.t_c     = threshold_of_connection
         self.max_n_c = max_number_of_connection
         self.min_n_c = min_number_of_connection
+
+        self.epoch = 1
+        self.output_path = output_path
 
     def search_path(self, plot_dag=False):
         self.link_edges()
         if plot_dag: self.plot_DAG()
         try:
-            self.prune_edges()
+            self.prune_edges(prune_sources=False, prune_sinks=True)
             if plot_dag: self.plot_DAG()
         except:
             self.plot_DAG()
             raise Exception
+        self.epoch += 1
     
     def link_edges(self):
         self.edges:list[tuple[int, int]] = []
@@ -123,7 +131,7 @@ class Model(nn.Module):
         return list(set([ node_id for node_id in self.get_to_node_ids(edges)
                           if node_id not in self.get_from_node_ids(edges) ]))
 
-    def prune_edges(self, prune_sources=False, prune_sinks=True):
+    def prune_edges(self, prune_sources, prune_sinks):
         assert prune_sources or prune_sinks, "Prune???"
         edges_tmp = self.edges.copy()
         self.removed_source_ids:list[int] = []
@@ -152,13 +160,17 @@ class Model(nn.Module):
                     self.removed_sink_ids.append(sink_id)
                     pbar.update(1)
                 # print(self.get_sink_ids(edges_tmp), end=' ')  # Debug
+            pbar.set_description("Pruning sinks... Remaining")
             pbar.close()
             # print('')  # Debug
         self.pruned = True
         self.edges = edges_tmp
-
+    
     def plot_DAG(self):
+        plt.figure(figsize=(10, 10))
         if not self.pruned:
+            plt.figure(figsize=(10, 10))
+            plt.title(f"DAG_before_prune (Epoch: {self.epoch})", fontsize=30)
             imported_plot_DAG(graph_data={
                 "node_num"          : self.node_num,
                 "edges"             : self.edges,
@@ -167,8 +179,11 @@ class Model(nn.Module):
                 "removed_source_ids": [],
                 "sink_ids"          : self.get_sink_ids(),
                 "removed_sink_ids"  : [],
-            }, filename="DAG_before_prune")
+            })
+            plt.tight_layout()
+            plt.savefig(f"{self.output_path}/DAG_before_prune_{self.epoch}")
         else:
+            plt.title(f"DAG_after_prune (Epoch: {self.epoch})", fontsize=30)
             imported_plot_DAG(graph_data={
                 "node_num"          : self.node_num,
                 "edges"             : self.edges,
@@ -177,30 +192,39 @@ class Model(nn.Module):
                 "removed_source_ids": self.removed_source_ids,
                 "sink_ids"          : self.get_sink_ids(),
                 "removed_sink_ids"  : self.removed_sink_ids,
-            }, filename="DAG_after_prune")
+            })
+            plt.tight_layout()
+            plt.savefig(f"{self.output_path}/DAG_after_prune_{self.epoch}")
+        plt.close()
 
-    def forward(self, x):
+    def forward(self, input_images):
         input_amounts_copy = self.input_amounts.copy()
         while 0 in input_amounts_copy:
             source_id = input_amounts_copy.index(0)
-            edges_from_source = list(filter(lambda e: e[0]==source_id, self.edges))
-            for edge in edges_from_source: input_amounts_copy[edge[1]] -= 1
-            input_amounts_copy[source_id] = -1
-            raise NotImplementedError
+            if source_id == 0:
+                self.nodes[source_id](input_images)
+            else:
+                edges_from_source = list(filter(lambda e: e[0]==source_id, self.edges))
+                raise NotImplementedError
+
+            # for edge in edges_from_source: input_amounts_copy[edge[1]] -= 1
+            # input_amounts_copy[source_id] = -1
         return x
 
 
-class Node(nn.Module):
-    def __init__(self, node_num, max_depth):
-        super(Node, self).__init__()
-        self.linear = nn.Linear((node_num-1)*max_depth, max_depth)
-        self.activation = nn.ReLU()
+class LinearNode(nn.Module):
+    def __init__(self, node_num, max_depth, first=False, last=False):
+        super(LinearNode, self).__init__()
+        input_size  =  3 if first else (node_num-1)*max_depth
+        output_size = 10 if  last else max_depth
+        self.linear     = nn.Linear(input_size, output_size)
+        self.activation = nn.Softmax() if last else nn.ReLU()
         
     def forward(self, x):
         self.output = self.activation(self.linear(x))
 
 
-''' Execution '''
+""" Execution """
 if __name__ == "__main__":
 
     NODE_NUMBER = 64
@@ -209,8 +233,6 @@ if __name__ == "__main__":
     MAX_NUMBER_OF_CONNECTION = 4     # max_n_c >= 1
     MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
 
-    # for i in range(1000):
-    #     print(f"{i:03}")
     model = Model(NODE_NUMBER, NODE_DEPTH, THRESHOLD_OF_CONNECTION,
-                MAX_NUMBER_OF_CONNECTION, MIN_NUMBER_OF_CONNECTION)
+                  MAX_NUMBER_OF_CONNECTION, MIN_NUMBER_OF_CONNECTION, ".")
     model.search_path(plot_dag=True)

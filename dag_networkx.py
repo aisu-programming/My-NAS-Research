@@ -1,4 +1,4 @@
-''' Libraries '''
+""" Libraries """
 import sys
 import time
 import math
@@ -7,8 +7,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 
-''' Functions '''
-def plot_DAG(graph_data, filename=None, test=False):
+""" Functions """
+def plot_DAG(graph_data):
 
     node_num           = graph_data["node_num"]
     edges              = graph_data["edges"]
@@ -46,7 +46,6 @@ def plot_DAG(graph_data, filename=None, test=False):
     white_limit = 0.7
     edge_colors = [ str((1-ec)*white_limit) for ec in edge_colors ]
 
-    plt.figure(figsize=(10, 10))
     t1 = time.time()
     print("Rendering... ", end='')
     sys.stdout.flush()
@@ -62,14 +61,10 @@ def plot_DAG(graph_data, filename=None, test=False):
     t2 = time.time()
     print(f"cost time: {t2-t1:.2f} seconds")
 
-    filename = "test" if test else ("DAG" if filename is None else filename)
-    plt.savefig(filename)
-    # plt.show()
-    plt.close()
     return
 
 
-''' Execution '''
+""" Execution """
 if __name__ == "__main__":
 
     NUMBER_OF_NODES = 64

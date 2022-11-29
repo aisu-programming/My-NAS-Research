@@ -2,6 +2,9 @@
 .vscode
 venv4*
 
+# Training
+CIFAR10
+
 # Misc
 *.pyc
 *.png
