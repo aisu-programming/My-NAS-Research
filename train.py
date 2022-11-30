@@ -32,11 +32,11 @@ from model import Model
 
 
 """ Hyperparameters """
-NODE_NUMBER = 32
-MAX_DEPTH   = 16
-THRESHOLD_OF_CONNECTION  = 0.5   # t_c
-MAX_NUMBER_OF_CONNECTION = 5     # max_n_c >= 1
-MIN_NUMBER_OF_CONNECTION = 3     # min_n_c >= 1
+NODE_NUMBER = 50
+MAX_DEPTH   = 8
+THRESHOLD_OF_CONNECTION  = 0.25  # t_c
+MAX_NUMBER_OF_CONNECTION = 9     # max_n_c >= 1
+MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
 BATCH_SIZE = 64
 
 
@@ -92,64 +92,74 @@ def main(opt):
 
     """ Training """
     loss_fn = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9995)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.995)
 
     """ Train """
-    valid_iterator = enumerate(valid_dataloader).__iter__()
-    train_iterator = enumerate(train_dataloader).__iter__()
-    model.search_path(plot_dag=True)
+    valid_iterator = enumerate(valid_dataloader.__iter__())
+    train_iterator = enumerate(train_dataloader.__iter__())
     for epoch in range(1, 100+1):
 
-        """ Train alphas using valid dataset """
-        losses, correct_num = [], 0
-        model.unfreeze_alphas()
-        model.freeze_nodes()
-        # pbar = tqdm(enumerate(valid_dataloader), total=len(valid_dataloader), ascii=True)
-        # for bi, (batch_imgs, batch_labels) in pbar:
-        #     if bi == 50: break
-        bi, (batch_imgs, batch_labels) = next(valid_iterator)
-        batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
+        model.search_path(plot_dag=True)
+        train_losses, train_corrects = [], []
+        valid_losses, valid_corrects = [], []
 
-        optimizer.zero_grad()
-        batch_predictions:torch.Tensor = model(batch_imgs)
-        loss = loss_fn(batch_predictions, batch_labels)
-        loss.backward()
-        optimizer.step()
-        lr_scheduler.step()
-        # lr_scheduler.step(loss.item())
-        
-        correct_num += (torch.argmax(batch_predictions, dim=-1)==batch_labels).float().sum()
-        accuracy = correct_num/batch_labels.shape[0]
-        losses.append(loss.item())
-        avg_loss = np.average(losses)
-        print(f"Epoch {epoch:3}/100 [Alphas] Avg Loss: {avg_loss:.4f}, " +
-              f"Acc: {accuracy*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
+        for _ in range(5):
 
-        """ Train nodes using train dataset """
-        losses, correct_num = [], 0
-        model.freeze_alphas()
-        model.unfreeze_nodes()
-        # pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), ascii=True)
-        # for bi, (batch_imgs, batch_labels) in pbar:
-        #     if bi == 50: break
-        bi, (batch_imgs, batch_labels) = next(train_iterator)
-        batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
+            """ Train alphas using valid dataset """
+            model.unfreeze_alphas()
+            model.freeze_nodes()
+            # pbar = tqdm(enumerate(valid_dataloader), total=len(valid_dataloader), ascii=True)
+            # for bi, (batch_imgs, batch_labels) in pbar:
+            #     if bi == 50: break
+            try:
+                bi, (batch_imgs, batch_labels) = next(valid_iterator)
+            except StopIteration:
+                valid_iterator = enumerate(valid_dataloader.__iter__())
+                bi, (batch_imgs, batch_labels) = next(valid_iterator)
 
-        optimizer.zero_grad()
-        batch_predictions:torch.Tensor = model(batch_imgs)
-        loss = loss_fn(batch_predictions, batch_labels)
-        loss.backward()
-        optimizer.step()
-        lr_scheduler.step()
-        # lr_scheduler.step(loss.item())
-        
-        correct_num += (torch.argmax(batch_predictions, dim=-1)==batch_labels).float().sum()
-        accuracy = correct_num/batch_labels.shape[0]
-        losses.append(loss.item())
-        avg_loss = np.average(losses)
-        print(f"Epoch {epoch:3}/100 [Nodes ] Avg Loss: {avg_loss:.4f}, " +
-              f"Acc: {accuracy*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
+            batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
+
+            optimizer.zero_grad()
+            batch_predictions:torch.Tensor = model(batch_imgs)
+            loss = loss_fn(batch_predictions, batch_labels)
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            # lr_scheduler.step(loss.item())
+            
+            valid_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
+            valid_losses.append(loss.item())
+            
+
+            """ Train nodes using train dataset """
+            model.freeze_alphas()
+            model.unfreeze_nodes()
+            # pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), ascii=True)
+            # for bi, (batch_imgs, batch_labels) in pbar:
+            #     if bi == 50: break
+            try:
+                bi, (batch_imgs, batch_labels) = next(train_iterator)
+            except StopIteration:
+                train_iterator = enumerate(train_dataloader.__iter__())
+                bi, (batch_imgs, batch_labels) = next(train_iterator)
+            batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
+
+            optimizer.zero_grad()
+            batch_predictions:torch.Tensor = model(batch_imgs)
+            loss = loss_fn(batch_predictions, batch_labels)
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            # lr_scheduler.step(loss.item())
+            
+            train_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
+            train_losses.append(loss.item())
+
+        print(f"Epoch {epoch:3}/100 [Alphas] Avg Loss: {np.average(valid_losses):.4f}, " +
+              f"Acc: {np.average(valid_corrects)*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
+        print(f"Epoch {epoch:3}/100 [Nodes ] Avg Loss: {np.average(train_losses):.4f}, " +
+              f"Acc: {np.average(train_corrects)*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
 
 
 """ Execution """
