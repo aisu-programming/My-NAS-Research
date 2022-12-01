@@ -21,7 +21,7 @@ def cycle_check(edges, input_amounts):
 
 
 class Model(torch.nn.Module):
-    def __init__(self, node_num, max_depth, threshold_of_connection,
+    def __init__(self, node_num, max_depth, limit, threshold_of_connection,
                  max_number_of_connection, min_number_of_connection, output_path):
         super(Model, self).__init__()
         assert max_number_of_connection >= 1, "max_number_of_connection should >= 1"
@@ -29,9 +29,9 @@ class Model(torch.nn.Module):
         self.node_num = node_num
         self.max_depth = max_depth
         self.nodes = torch.nn.ModuleList([
-            LinearNode(node_num, max_depth, first=True) if node_id == 0 else
-            LinearNode(node_num, max_depth,  last=True) if node_id == node_num-1 else
-            LinearNode(node_num, max_depth) for node_id in range(node_num) ])
+            LimitedConnectNode(limit, max_depth, first=True) if node_id == 0 else
+            LimitedConnectNode(limit, max_depth,  last=True) if node_id == node_num-1 else
+            LimitedConnectNode(limit, max_depth) for node_id in range(node_num) ])
         alphas = torch.rand(node_num*node_num) * 0.1 + 0.9
         for i in range(node_num):
             alphas[i*node_num + i] = 0  # prevent node from linking to itself
@@ -69,7 +69,8 @@ class Model(torch.nn.Module):
     def search_path(self, plot_dag=False):
         # Initialize nodes' output every epoch starts
         for node in self.nodes: node.forwarded = False  # type: ignore
-        self.link_edges()
+        # self.link_UnlimitedConnectNode_edges()  # Deprecated
+        self.link_LimitedConnectNode_edges()
         if plot_dag: self.plot_DAG()
         try:
             self.prune_edges(prune_sources=False, prune_sinks=True)
@@ -79,7 +80,9 @@ class Model(torch.nn.Module):
             raise Exception
         self.epoch += 1
     
-    def link_edges(self):
+    # Deprecated
+    def link_UnlimitedConnectNode_edges(self):
+        raise Exception("UnlimitedConnectNode deprecated.")
         self.edges:list[tuple[int, int, int]] = []
         input_amounts = self.input_amounts.copy()
         alphas_tmp = list(self.alphas.cpu().detach().numpy())
@@ -98,6 +101,65 @@ class Model(torch.nn.Module):
             edges_to_node = list(filter(lambda e: e[1]==to_node_id, self.edges))
             continue_or_not = False
             if len(edges_to_node) >= connection_limit:
+                # Disable new link to this to_node (node_id=to_node_id)
+                for from_node_id in range(self.node_num):
+                    alphas_tmp[from_node_id*self.node_num+to_node_id] = 0
+                continue_or_not = True
+            # Limitation to outputs of "from_node" (node_id=from_node_id)
+            edges_from_node = list(filter(lambda e: e[0]==from_node_id, self.edges))
+            if len(edges_from_node) >= connection_limit:
+                # Disable new link from this from_node (node_id=from_node_id)
+                for to_node_id in range(self.node_num):
+                    alphas_tmp[from_node_id*self.node_num+to_node_id] = 0
+                continue_or_not = True
+            # Only limit to output --> create multiple sinks but only one source
+            # Only limit to input --> create multiple sources but only one sink
+            # Both --> create multiple sources and multiple sinks
+            # Do nothing --> create only one source and only one sink
+            if continue_or_not: continue
+
+            
+            # Make a copy for with new edge, and do cycle check
+            edges_tmp, input_amounts_tmp = self.edges.copy(), input_amounts.copy()
+            edges_tmp.append((from_node_id, to_node_id, max_alpha))
+            if input_amounts_tmp[from_node_id] == -1: input_amounts_tmp[from_node_id] = 0
+            input_amounts_tmp[to_node_id] = 1 if input_amounts_tmp[to_node_id] == -1 else input_amounts_tmp[to_node_id] + 1
+            if cycle_check(edges_tmp, input_amounts_tmp):
+                self.edges    = edges_tmp
+                input_amounts = input_amounts_tmp
+                alphas_tmp[max_alpha_id] = 0
+                alphas_tmp[to_node_id*self.node_num+from_node_id] = 0
+            else:
+                alphas_tmp[max_alpha_id] = 0
+            pbar.update(1)
+        # pbar.close()
+        # print('')
+        self.isolated_node_ids = [
+            node_id for node_id in range(self.node_num)
+            if node_id not in self.get_from_node_ids() and
+               node_id not in self.get_to_node_ids() ]
+        self.pruned = False
+
+    def link_LimitedConnectNode_edges(self):
+        self.edges:list[tuple[int, int, int]] = []
+        input_amounts = self.input_amounts.copy()
+        alphas_tmp = list(self.alphas.cpu().detach().numpy())
+        pbar = tqdm(desc="Backward searching forwarding path")
+        while True:
+            max_alpha = max(alphas_tmp)
+            if max_alpha == 0: break
+            max_alpha_id = alphas_tmp.index(max_alpha)
+            from_node_id = max_alpha_id // self.node_num
+            to_node_id   = max_alpha_id  % self.node_num
+
+            
+            # Limitation
+            connection_limit = self.max_n_c if max_alpha > self.t_c else self.min_n_c
+            # Limitation to inputs of "to_node" (node_id=to_node_id)
+            to_node:LimitedConnectNode = self.nodes[to_node_id]  # type: ignore
+            edges_to_node = list(filter(lambda e: e[1]==to_node_id, self.edges))
+            continue_or_not = False
+            if len(edges_to_node) >= connection_limit or len(edges_to_node) >= to_node.limit:
                 # Disable new link to this to_node (node_id=to_node_id)
                 for from_node_id in range(self.node_num):
                     alphas_tmp[from_node_id*self.node_num+to_node_id] = 0
@@ -172,8 +234,6 @@ class Model(torch.nn.Module):
                 for source_id in self.get_source_ids(edges_tmp):
                     if source_id == 0 or source_id == self.node_num-1: continue
                     self.removed_source_ids.append(source_id)
-                    removed_edges = list(filter(lambda e: e[0]==source_id, edges_tmp))
-                    # for removed_edge in removed_edges: self.input_amounts[removed_edge[1]] -= 1
                     edges_tmp = list(filter(lambda e: e[0]!=source_id, edges_tmp))
                     pbar.update(1)
                 # print(self.get_source_ids(edges_tmp), end=' ')  # Debug
@@ -187,7 +247,6 @@ class Model(torch.nn.Module):
                 for sink_id in self.get_sink_ids(edges_tmp):
                     if sink_id == self.node_num-1: continue
                     self.removed_sink_ids.append(sink_id)
-                    # self.input_amounts[sink_id] = -1
                     edges_tmp = list(filter(lambda e: e[1]!=sink_id, edges_tmp))
                     pbar.update(1)
                 # print(self.get_sink_ids(edges_tmp), end=' ')  # Debug
@@ -200,7 +259,6 @@ class Model(torch.nn.Module):
     def plot_DAG(self):
         plt.figure(figsize=(10, 10))
         if not self.pruned:
-            plt.figure(figsize=(10, 10))
             plt.title(f"DAG_before_prune (Epoch: {self.epoch})", fontsize=30)
             imported_plot_DAG(graph_data={
                 "node_num"          : self.node_num,
@@ -230,9 +288,11 @@ class Model(torch.nn.Module):
             if self.epoch == 1: plt.savefig(f"DAG_after_prune_{self.epoch}")  # Debug
         plt.close()
 
-    def get_input(self, to_node_id, from_node_ids:"list[int]", batch_size):
+    # Deprecated
+    def get_UnlimitedConnectNode_input(self, to_node_id, from_node_ids:"list[int]", batch_size):
+        raise Exception("UnlimitedConnectNode deprecated.")
         if len(from_node_ids) == 0:
-            output = torch.zeros((batch_size, self.max_depth*(self.node_num-1), 32, 32))
+            output = torch.zeros((batch_size, (self.node_num-1)*self.max_depth, 32, 32))
             output = output.to(next(self.parameters()).device)
             return output
         input = []
@@ -249,7 +309,9 @@ class Model(torch.nn.Module):
         input = torch.concat(input, dim=1)
         return input
 
-    def forward(self, input_images:torch.Tensor) -> torch.Tensor:
+    # Deprecated
+    def forward_UnlimitedConnectNode_input(self, input_images:torch.Tensor) -> torch.Tensor:
+        raise Exception("UnlimitedConnectNode deprecated.")
         assert self.pruned
         input_amounts_copy = self.input_amounts.copy()
         source_id = 0
@@ -260,7 +322,8 @@ class Model(torch.nn.Module):
             else:
                 edges_to_source = list(filter(lambda e: e[1]==source_id, self.edges))
                 from_node_ids = self.get_from_node_ids(edges_to_source)
-                self.nodes[source_id](self.get_input(source_id, from_node_ids, input_images.shape[0]))
+                self.nodes[source_id](
+                    self.get_UnlimitedConnectNode_input(source_id, from_node_ids, input_images.shape[0]))
             edges_from_source = list(filter(lambda e: e[0]==source_id, self.edges))
             for edge in edges_from_source: input_amounts_copy[edge[1]] -= 1
             input_amounts_copy[source_id] = -1
@@ -268,21 +331,106 @@ class Model(torch.nn.Module):
         assert source_id == self.node_num-1
         return self.nodes[source_id].output  # type: ignore
 
+    def get_LimitedConnectNode_input(self, to_node_id, from_node_ids:"list[int]", batch_size):
+        to_node:LimitedConnectNode = self.nodes[to_node_id]  # type: ignore
+        if len(from_node_ids) == 0:
+            output = torch.zeros((batch_size, to_node.limit*self.max_depth, 32, 32))
+            output = output.to(next(self.parameters()).device)
+            return output
+        input = []
+        zeros = torch.zeros((batch_size, self.max_depth, 32, 32))
+        zeros = zeros.to(next(self.parameters()).device)
+        for from_node_id in from_node_ids:
+            from_node:LimitedConnectNode = self.nodes[from_node_id]  # type: ignore
+            assert from_node.forwarded
+            alpha = torch.nn.Sigmoid()(self.alphas[from_node_id*(self.node_num)+to_node_id])
+            input.append(alpha*from_node.output)
+        for _ in range(max(0, to_node.limit-len(from_node_ids))):
+            input.append(zeros)
+        input = torch.concat(input, dim=1)
+        return input
 
-class LinearNode(torch.nn.Module):
-    def __init__(self, node_num, max_depth, first=False, last=False):
-        super(LinearNode, self).__init__()
+    def forward_LimitedConnectNode_input(self, input_images:torch.Tensor) -> torch.Tensor:
+        assert self.pruned
+        input_amounts_copy = self.input_amounts.copy()
+        source_id = 0
+        while 0 in input_amounts_copy:
+            source_id = input_amounts_copy.index(0)
+            if source_id == 0:
+                self.nodes[source_id](input_images)
+            else:
+                edges_to_source = list(filter(lambda e: e[1]==source_id, self.edges))
+                edges_to_source = sorted(edges_to_source, key=lambda e: e[2], reverse=True)  # sort by alpha in descending order
+                from_node_ids = self.get_from_node_ids(edges_to_source)
+                self.nodes[source_id](
+                    self.get_LimitedConnectNode_input(source_id, from_node_ids, input_images.shape[0]))
+            edges_from_source = list(filter(lambda e: e[0]==source_id, self.edges))
+            for edge in edges_from_source: input_amounts_copy[edge[1]] -= 1
+            input_amounts_copy[source_id] = -1
+            self.nodes[source_id].forwarded = True  # type: ignore
+        assert source_id == self.node_num-1
+        return self.nodes[source_id].output  # type: ignore
+
+    def forward(self, input_images) -> torch.Tensor:
+        # return self.forward_UnlimitedConnectNode_input(input_images)  # Deprecated
+        return self.forward_LimitedConnectNode_input(input_images)
+
+
+# Deprecated
+class UnlimitedConnectNode(torch.nn.Module):
+    def __init__(self, node_num, max_depth, kernel_size=1, first=False, last=False):
+        super(UnlimitedConnectNode, self).__init__()
         self.last = last
         input_size = 3 if first else (node_num-1)*max_depth
         if not last:
             self.layers = torch.nn.ModuleList([
-                torch.nn.Conv2d(input_size, max_depth, kernel_size=1),
+                torch.nn.Conv2d(input_size, max_depth, kernel_size=kernel_size),
                 torch.nn.ReLU(),
             ])
         else:
             self.layers = torch.nn.ModuleList([
-                torch.nn.Conv2d(input_size, 4, kernel_size=1),
+                torch.nn.Conv2d(input_size, 4, kernel_size=kernel_size),
                 torch.nn.ReLU(),
+                torch.nn.Flatten(),
+                torch.nn.Linear(32*32*4, 10),
+                torch.nn.Softmax(dim=-1),
+            ])
+        self.forwarded = False
+
+    def freeze(self):
+        for param in self.parameters(): param.requires_grad = False
+        
+    def unfreeze(self):
+        for param in self.parameters(): param.requires_grad = True
+
+    def forward(self, input:torch.Tensor):
+        x = input
+        for layer in self.layers: x = layer(x)
+        self.output:torch.Tensor = x
+        assert self.output.shape[0] == input.shape[0]
+        if not self.last:
+            assert self.output.shape[2] == input.shape[2]
+            assert self.output.shape[3] == input.shape[3]
+
+
+class LimitedConnectNode(torch.nn.Module):
+    def __init__(self, limit, max_depth, kernel_size=1, first=False, last=False):
+        super(LimitedConnectNode, self).__init__()
+        assert limit >= 1 and max_depth>= 1
+        self.limit = limit
+        self.last = last
+        input_size = 3 if first else limit*max_depth
+        if not last:
+            self.layers = torch.nn.ModuleList([
+                torch.nn.Conv2d(input_size, max_depth, kernel_size=kernel_size),
+                torch.nn.ReLU(),
+                torch.nn.BatchNorm2d(max_depth),
+            ])
+        else:
+            self.layers = torch.nn.ModuleList([
+                torch.nn.Conv2d(input_size, 4, kernel_size=kernel_size),
+                torch.nn.ReLU(),
+                torch.nn.BatchNorm2d(4),
                 torch.nn.Flatten(),
                 torch.nn.Linear(32*32*4, 10),
                 torch.nn.Softmax(dim=-1),
@@ -310,11 +458,12 @@ if __name__ == "__main__":
 
     NODE_NUMBER = 32
     NODE_DEPTH  = 4
+    LIMIT       = 5
     THRESHOLD_OF_CONNECTION  = 0.75  # t_c
     MAX_NUMBER_OF_CONNECTION = 4     # max_n_c >= 1
     MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
     OUTPUT_PATH = "."
 
-    model = Model(NODE_NUMBER, NODE_DEPTH, THRESHOLD_OF_CONNECTION,
+    model = Model(NODE_NUMBER, NODE_DEPTH, LIMIT, THRESHOLD_OF_CONNECTION,
                   MAX_NUMBER_OF_CONNECTION, MIN_NUMBER_OF_CONNECTION, OUTPUT_PATH)
     model.search_path(plot_dag=True)

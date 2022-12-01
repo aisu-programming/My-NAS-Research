@@ -32,8 +32,9 @@ from model import Model
 
 
 """ Hyperparameters """
-NODE_NUMBER = 50
-MAX_DEPTH   = 8
+NODE_NUMBER = 32
+MAX_DEPTH   = 32
+LIMIT       = 5
 THRESHOLD_OF_CONNECTION  = 0.25  # t_c
 MAX_NUMBER_OF_CONNECTION = 9     # max_n_c >= 1
 MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
@@ -71,11 +72,11 @@ def main(opt):
     os.makedirs(f"{output_path}/DAG_after_prune", exist_ok=True)
 
     """ Model """
-    node_num, max_depth = opt.node_number, opt.max_depth
-    threshold_of_connection = opt.t_c
-    max_number_of_connection, min_number_of_connection = opt.max_n_c, opt.min_n_c
+    node_num, max_depth, limit = opt.node_number, opt.max_depth, opt.limit
+    threshold_of_connection, max_number_of_connection, min_number_of_connection = \
+        opt.t_c, opt.max_n_c, opt.min_n_c
     batch_size = opt.batch_size
-    model = Model(node_num, max_depth, threshold_of_connection, max_number_of_connection,
+    model = Model(node_num, max_depth, limit, threshold_of_connection, max_number_of_connection,
                   min_number_of_connection, output_path).to(DEVICE)
 
     """ Data """
@@ -169,6 +170,7 @@ if __name__ == "__main__":
     """ Model """
     parser.add_argument("--node_number", type=int, default=NODE_NUMBER, help="Number of nodes")
     parser.add_argument("--max_depth", type=int, default=MAX_DEPTH, help="Max number of nodes")
+    parser.add_argument("--limit", type=int, default=LIMIT, help="Max number of nodes' input")
     parser.add_argument("--t_c", type=float, default=THRESHOLD_OF_CONNECTION, help="Threshold of connection")
     parser.add_argument("--max_n_c", type=int, default=MAX_NUMBER_OF_CONNECTION, help="Max number of connection")
     parser.add_argument("--min_n_c", type=int, default=MIN_NUMBER_OF_CONNECTION, help="Min number of connection")
