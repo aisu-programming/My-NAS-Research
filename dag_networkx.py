@@ -41,7 +41,7 @@ def plot_DAG(graph_data):
 
     edge_weights = list(nx.get_edge_attributes(G, "weight").values())
     ews = edge_weights
-    edge_colors = [ (ew-min(ews))/(max(ews)-min(ews)) for ew in ews ]
+    edge_colors = [ (1/(1+math.exp((-ew+0.5)*2))) for ew in ews ]
     white_limit = 0.7
     edge_colors = [ str((1-ec)*white_limit) for ec in edge_colors ]
 

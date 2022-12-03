@@ -9,7 +9,6 @@ from tqdm import tqdm
 import torch
 import torch.utils.data
 import torchvision
-
 SEED = 0
 random.seed(SEED)
 np.random.seed(SEED)
@@ -26,19 +25,19 @@ if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True  # type: ignore
 else:
     DEVICE = torch.device("cpu")
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 from model import Model
 
 
-
 """ Hyperparameters """
 NODE_NUMBER = 32
-MAX_DEPTH   = 32
-LIMIT       = 5
-THRESHOLD_OF_CONNECTION  = 0.25  # t_c
-MAX_NUMBER_OF_CONNECTION = 9     # max_n_c >= 1
+MAX_DEPTH   = 8
+THRESHOLD_OF_CONNECTION  = 0.01  # t_c
+MAX_NUMBER_OF_CONNECTION = 99    # max_n_c >= 1
 MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
-BATCH_SIZE = 64
+BATCH_SIZE = 16
 
 
 """ Function """
@@ -56,10 +55,10 @@ def get_lr(optimizer):
 #             torch.Tensor(dataset.__getitem__(id)[0]).to(DEVICE),
 #             torch.Tensor(dataset.__getitem__(id)[1]).to(DEVICE)
 #         ) for id in range(len(dataset)) ]
-
+#
 #     def __len__(self):
 #         return len(self.dataset)
-
+#
 #     def __getitem__(self, i):
 #         return self.dataset[i]
 
@@ -68,15 +67,16 @@ def main(opt):
 
     """ Misc """
     output_path = opt.output_path
+    os.makedirs(f"{output_path}/Alpha", exist_ok=True)
     os.makedirs(f"{output_path}/DAG_before_prune", exist_ok=True)
     os.makedirs(f"{output_path}/DAG_after_prune", exist_ok=True)
 
     """ Model """
-    node_num, max_depth, limit = opt.node_number, opt.max_depth, opt.limit
+    node_num, max_depth = opt.node_number, opt.max_depth
     threshold_of_connection, max_number_of_connection, min_number_of_connection = \
         opt.t_c, opt.max_n_c, opt.min_n_c
     batch_size = opt.batch_size
-    model = Model(node_num, max_depth, limit, threshold_of_connection, max_number_of_connection,
+    model = Model(node_num, max_depth, threshold_of_connection, max_number_of_connection,
                   min_number_of_connection, output_path).to(DEVICE)
 
     """ Data """
@@ -94,31 +94,29 @@ def main(opt):
     """ Training """
     loss_fn = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-    lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.995)
+    lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9995)
 
     """ Train """
     valid_iterator = enumerate(valid_dataloader.__iter__())
     train_iterator = enumerate(train_dataloader.__iter__())
     for epoch in range(1, 100+1):
 
-        model.search_path(plot_dag=True)
-        train_losses, train_corrects = [], []
-        valid_losses, valid_corrects = [], []
+        model.search_path()
+        node_losses, node_corrects = [], []
+        alpha_losses, alpha_corrects = [], []
 
-        for _ in range(5):
+        pbar = tqdm(total=50, ascii=True)
+        pbar_alpha_des, pbar_node_des = "", ""
+        for _ in range(50):
 
             """ Train alphas using valid dataset """
-            model.unfreeze_alphas()
-            model.freeze_nodes()
-            # pbar = tqdm(enumerate(valid_dataloader), total=len(valid_dataloader), ascii=True)
-            # for bi, (batch_imgs, batch_labels) in pbar:
-            #     if bi == 50: break
+            # model.unfreeze_alphas()
+            # model.freeze_nodes()
             try:
                 bi, (batch_imgs, batch_labels) = next(valid_iterator)
             except StopIteration:
                 valid_iterator = enumerate(valid_dataloader.__iter__())
                 bi, (batch_imgs, batch_labels) = next(valid_iterator)
-
             batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
 
             optimizer.zero_grad()
@@ -129,38 +127,42 @@ def main(opt):
             lr_scheduler.step()
             # lr_scheduler.step(loss.item())
             
-            valid_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
-            valid_losses.append(loss.item())
+            alpha_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
+            alpha_losses.append(loss.item())
+            pbar.update(1)
+            pbar_alpha_des = f"Alphas Avg Loss: {np.average(alpha_losses):.4f}, " + \
+                             f"Alphas Acc: {np.average(alpha_corrects)*100:6.3f}%"
+            pbar.set_description(f"Epoch {epoch:3}/100 | " + pbar_alpha_des + f" | LR: {get_lr(optimizer):.8f}")
+
+            # pbar.set_description(f"Epoch {epoch:3}/100 | " + pbar_alpha_des + " | " +
+            #                        pbar_node_des + )
+
+            # """ Train nodes using train dataset """
+            # # model.freeze_alphas()
+            # # model.unfreeze_nodes()
+            # try:
+            #     bi, (batch_imgs, batch_labels) = next(train_iterator)
+            # except StopIteration:
+            #     train_iterator = enumerate(train_dataloader.__iter__())
+            #     bi, (batch_imgs, batch_labels) = next(train_iterator)
+            # batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
+
+            # optimizer.zero_grad()
+            # batch_predictions:torch.Tensor = model(batch_imgs)
+            # loss = loss_fn(batch_predictions, batch_labels)
+            # loss.backward()
+            # optimizer.step()
+            # lr_scheduler.step()
+            # # lr_scheduler.step(loss.item())
             
-
-            """ Train nodes using train dataset """
-            model.freeze_alphas()
-            model.unfreeze_nodes()
-            # pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), ascii=True)
-            # for bi, (batch_imgs, batch_labels) in pbar:
-            #     if bi == 50: break
-            try:
-                bi, (batch_imgs, batch_labels) = next(train_iterator)
-            except StopIteration:
-                train_iterator = enumerate(train_dataloader.__iter__())
-                bi, (batch_imgs, batch_labels) = next(train_iterator)
-            batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
-
-            optimizer.zero_grad()
-            batch_predictions:torch.Tensor = model(batch_imgs)
-            loss = loss_fn(batch_predictions, batch_labels)
-            loss.backward()
-            optimizer.step()
-            lr_scheduler.step()
-            # lr_scheduler.step(loss.item())
-            
-            train_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
-            train_losses.append(loss.item())
-
-        print(f"Epoch {epoch:3}/100 [Alphas] Avg Loss: {np.average(valid_losses):.4f}, " +
-              f"Acc: {np.average(valid_corrects)*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
-        print(f"Epoch {epoch:3}/100 [Nodes ] Avg Loss: {np.average(train_losses):.4f}, " +
-              f"Acc: {np.average(train_corrects)*100:6.3f}%, LR: {get_lr(optimizer):.8f}")
+            # node_corrects += list((torch.argmax(batch_predictions, dim=-1)==batch_labels).cpu().detach().numpy())
+            # node_losses.append(loss.item())
+            # pbar.update(1)
+            # pbar_node_des = f"Node Avg Loss: {np.average(node_losses):.4f}, " + \
+            #                 f"Node Acc: {np.average(node_corrects)*100:6.3f}%"
+            # pbar.set_description(f"Epoch {epoch:3}/100 | " + pbar_alpha_des + " | " +
+            #                        pbar_node_des + f" | LR: {get_lr(optimizer):.8f}")
+        pbar.close()
 
 
 """ Execution """
@@ -170,7 +172,6 @@ if __name__ == "__main__":
     """ Model """
     parser.add_argument("--node_number", type=int, default=NODE_NUMBER, help="Number of nodes")
     parser.add_argument("--max_depth", type=int, default=MAX_DEPTH, help="Max number of nodes")
-    parser.add_argument("--limit", type=int, default=LIMIT, help="Max number of nodes' input")
     parser.add_argument("--t_c", type=float, default=THRESHOLD_OF_CONNECTION, help="Threshold of connection")
     parser.add_argument("--max_n_c", type=int, default=MAX_NUMBER_OF_CONNECTION, help="Max number of connection")
     parser.add_argument("--min_n_c", type=int, default=MIN_NUMBER_OF_CONNECTION, help="Min number of connection")
