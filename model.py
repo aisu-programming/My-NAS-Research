@@ -304,6 +304,19 @@ class Model(torch.nn.Module):
             input += alpha*from_node.output
         return input
 
+    # def get_input(self, to_node_id, from_node_ids:"list[int]", batch_size):
+    #     if len(from_node_ids) == 0:
+    #         return torch.zeros(batch_size, self.node_depth, 32, 32)
+    #     inputs, alphas = [], []
+    #     for from_node_id in from_node_ids:
+    #         from_node:Node = self.nodes[from_node_id]  # type: ignore
+    #         assert from_node.forwarded
+    #         alphas.append(torch.unsqueeze(self.alphas[from_node_id*(self.node_num)+to_node_id], dim=0))
+    #         inputs.append(from_node.output)
+    #     alphas = torch.concat(alphas)
+    #     alphas = torch.nn.Softmax(dim=-1)(alphas)
+    #     return sum([ i*a for i, a in zip(inputs, alphas) ])
+
     def forward(self, input_images:torch.Tensor) -> torch.Tensor:
         assert self.pruned
         input_amounts_copy = self.input_amounts.copy()
@@ -337,24 +350,24 @@ class Node(torch.nn.Module):
         elif last:
             self.layers = torch.nn.ModuleList([
                 # torch.nn.ReLU(),
-                torch.nn.BatchNorm2d(node_depth),
+                # torch.nn.BatchNorm2d(node_depth),
                 SigmoidConv2d(node_depth, 32, 3, stride=2, padding=1, bias=False),
                 # torch.nn.ReLU(),
-                torch.nn.BatchNorm2d(32),
+                # torch.nn.BatchNorm2d(32),
                 SigmoidConv2d(32, 8, 3, stride=2, padding=1, bias=False),
                 # torch.nn.ReLU(),
-                torch.nn.BatchNorm2d(8),
+                # torch.nn.BatchNorm2d(8),
                 torch.nn.Flatten(),
                 SigmoidLinear(8*8*8, 128, bias=False),
                 # torch.nn.ReLU(),
-                torch.nn.BatchNorm1d(128),
+                # torch.nn.BatchNorm1d(128),
                 SigmoidLinear(128, 10, bias=False),
                 torch.nn.Softmax(dim=-1),
             ])
         else:
             self.layers = torch.nn.ModuleList([
                 # torch.nn.ReLU(),
-                torch.nn.BatchNorm2d(node_depth),
+                # torch.nn.BatchNorm2d(node_depth),
                 SigmoidConv2d(node_depth, node_depth, 1, bias=False),
             ])
         self.forwarded = False
@@ -367,13 +380,7 @@ class Node(torch.nn.Module):
 
     def forward(self, input:torch.Tensor):
         x = input
-        for layer in self.layers:
-            if isinstance(layer, torch.nn.Conv2d):
-                weight = torch.nn.Sigmoid()(layer.weight)
-                bias   = torch.nn.Sigmoid()(layer.bias)
-                x = layer._conv_forward(x, weight, bias)
-            else:
-                x = layer(x)
+        for layer in self.layers: x = layer(x)
         self.output:torch.Tensor = x
         assert self.output.shape[0] == input.shape[0]
         if not self.last:
@@ -385,10 +392,12 @@ class SigmoidConv2d(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
         super(SigmoidConv2d, self).__init__()
         self.bias = bias
+        self.kernel_size = kernel_size
+        self.in_channels = in_channels
         self.conv2d = torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias)
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
-        weight = torch.nn.Sigmoid()(self.conv2d.weight)
+        weight = torch.nn.Sigmoid()(self.conv2d.weight) / (self.kernel_size**2*self.in_channels)
         bias = torch.nn.Sigmoid()(self.conv2d.bias) if self.bias else self.conv2d.bias
         return self.conv2d._conv_forward(input, weight, bias)
 
@@ -397,10 +406,11 @@ class SigmoidLinear(torch.nn.Module):
     def __init__(self, in_features, out_features, bias=True):
         super(SigmoidLinear, self).__init__()
         self.bias = bias
+        self.in_features = in_features
         self.linear = torch.nn.Linear(in_features, out_features, bias=bias)
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
-        weight = torch.nn.Sigmoid()(self.linear.weight)
+        weight = torch.nn.Sigmoid()(self.linear.weight) / self.in_features
         bias = torch.nn.Sigmoid()(self.linear.bias) if self.bias else self.linear.bias
         return torch.nn.functional.linear(input, weight, bias)
 
