@@ -33,11 +33,11 @@ from model import Model
 
 """ Hyperparameters """
 NODE_NUMBER = 32
-MAX_DEPTH   = 8
-THRESHOLD_OF_CONNECTION  = 0.01  # t_c
-MAX_NUMBER_OF_CONNECTION = 99    # max_n_c >= 1
-MIN_NUMBER_OF_CONNECTION = 1     # min_n_c >= 1
-BATCH_SIZE = 16
+NODE_DEPTH  = 256
+THRESHOLD_OF_CONNECTION  = 0.3  # t_c
+MAX_NUMBER_OF_CONNECTION = 8    # max_n_c >= 1
+MIN_NUMBER_OF_CONNECTION = 4    # min_n_c >= 1
+BATCH_SIZE = 128
 
 
 """ Function """
@@ -67,17 +67,17 @@ def main(opt):
 
     """ Misc """
     output_path = opt.output_path
-    os.makedirs(f"{output_path}/Alpha", exist_ok=True)
-    os.makedirs(f"{output_path}/DAG_before_prune", exist_ok=True)
-    os.makedirs(f"{output_path}/DAG_after_prune", exist_ok=True)
+    os.makedirs(f"{output_path}", exist_ok=True)
 
     """ Model """
-    node_num, max_depth = opt.node_number, opt.max_depth
+    node_num, node_depth = opt.node_number, opt.node_depth
     threshold_of_connection, max_number_of_connection, min_number_of_connection = \
         opt.t_c, opt.max_n_c, opt.min_n_c
     batch_size = opt.batch_size
-    model = Model(node_num, max_depth, threshold_of_connection, max_number_of_connection,
+    model = Model(node_num, node_depth, threshold_of_connection, max_number_of_connection,
                   min_number_of_connection, output_path).to(DEVICE)
+    # model.search_path(plot_dag=False)
+    # raise Exception
 
     """ Data """
     transform = torchvision.transforms.Compose([
@@ -97,8 +97,8 @@ def main(opt):
     lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9995)
 
     """ Train """
-    valid_iterator = enumerate(valid_dataloader.__iter__())
     train_iterator = enumerate(train_dataloader.__iter__())
+    # valid_iterator = enumerate(valid_dataloader.__iter__())
     for epoch in range(1, 100+1):
 
         model.search_path()
@@ -113,10 +113,10 @@ def main(opt):
             # model.unfreeze_alphas()
             # model.freeze_nodes()
             try:
-                bi, (batch_imgs, batch_labels) = next(valid_iterator)
+                bi, (batch_imgs, batch_labels) = next(train_iterator)
             except StopIteration:
-                valid_iterator = enumerate(valid_dataloader.__iter__())
-                bi, (batch_imgs, batch_labels) = next(valid_iterator)
+                train_iterator = enumerate(train_dataloader.__iter__())
+                bi, (batch_imgs, batch_labels) = next(train_iterator)
             batch_imgs, batch_labels = batch_imgs.to(DEVICE), batch_labels.to(DEVICE)
 
             optimizer.zero_grad()
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     
     """ Model """
     parser.add_argument("--node_number", type=int, default=NODE_NUMBER, help="Number of nodes")
-    parser.add_argument("--max_depth", type=int, default=MAX_DEPTH, help="Max number of nodes")
+    parser.add_argument("--node_depth" , type=int, default=NODE_DEPTH , help="Depth of nodes")
     parser.add_argument("--t_c", type=float, default=THRESHOLD_OF_CONNECTION, help="Threshold of connection")
     parser.add_argument("--max_n_c", type=int, default=MAX_NUMBER_OF_CONNECTION, help="Max number of connection")
     parser.add_argument("--min_n_c", type=int, default=MIN_NUMBER_OF_CONNECTION, help="Min number of connection")

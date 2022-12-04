@@ -1,6 +1,5 @@
 """ Libraries """
 import sys
-import time
 import math
 import random
 import networkx as nx
@@ -41,13 +40,10 @@ def plot_DAG(graph_data):
 
     edge_weights = list(nx.get_edge_attributes(G, "weight").values())
     ews = edge_weights
-    edge_colors = [ (1/(1+math.exp((-ew+0.5)*2))) for ew in ews ]
+    edge_colors = [ ew for ew in ews ]
     white_limit = 0.7
     edge_colors = [ str((1-ec)*white_limit) for ec in edge_colors ]
 
-    t1 = time.time()
-    print("Rendering... ", end='')
-    sys.stdout.flush()
     nx.draw(G,
         node_color=color_map,
         pos=node_positions,
@@ -57,9 +53,6 @@ def plot_DAG(graph_data):
         with_labels=True,
         connectionstyle="arc3, rad=0.3"
     )
-    t2 = time.time()
-    print(f"cost time: {t2-t1:.2f} seconds")
-
     return
 
 
