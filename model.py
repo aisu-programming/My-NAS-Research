@@ -27,7 +27,7 @@ def cycle_check(edges, input_amounts):
 
 class Model(torch.nn.Module):
     def __init__(self, node_num, node_depth, threshold_of_connection,
-                 max_number_of_connection, min_number_of_connection, output_path):
+                 max_number_of_connection, min_number_of_connection, criterion, output_path, device):
         super(Model, self).__init__()
         assert max_number_of_connection >= 1, "max_number_of_connection should >= 1"
         assert min_number_of_connection >= 1, "min_number_of_connection should >= 1"
@@ -37,8 +37,8 @@ class Model(torch.nn.Module):
             Node(node_depth, first=True) if node_id == 0 else
             Node(node_depth,  last=True) if node_id == node_num-1 else
             Node(node_depth) for node_id in range(node_num) ])
-        alphas_tensor = (torch.rand(node_num*node_num)-0.5)*0.05 + 1.4  # sigmoid(1.4) ~ 0.8
-        # alphas_tensor = torch.zeros(node_num*node_num)
+        # alphas_tensor = (torch.rand(node_num*node_num)-0.5)*0.05 + 1.4  # sigmoid(1.4) ~ 0.8
+        alphas_tensor = torch.ones(node_num*node_num) * 1.4
         self.alphas_tensor = torch.nn.parameter.Parameter(alphas_tensor)
         self.alphas_mask = torch.ones(node_num*node_num)
         for i in range(node_num):
@@ -51,6 +51,10 @@ class Model(torch.nn.Module):
         self.epoch = 1
         self.pruned = False
         self.output_path = output_path
+        self.device = device
+
+        """ Add from DARTS """
+        self.criterion = criterion
 
     def freeze_alphas(self):
         self.alphas_tensor.requires_grad = False
@@ -102,10 +106,10 @@ class Model(torch.nn.Module):
                           if node_id not in self.get_from_node_ids(edges) ]))
     
     def plot_DAG(self):
-        plt.figure(figsize=(10, 10))
+        plt.figure(figsize=(10*max(np.log2(self.node_num)-5, 1), 10*max(np.log2(self.node_num)-5, 1)))
         if not self.pruned:
             os.makedirs(f"{self.output_path}/DAG_before_prune", exist_ok=True)
-            plt.title(f"DAG_before_prune (Epoch: {self.epoch})", fontsize=30)
+            plt.title(f"DAG_before_prune (Epoch: {self.epoch})", fontsize=30*max(np.log2(self.node_num)-5, 1))
             imported_plot_DAG(graph_data={
                 "node_num"          : self.node_num,
                 "edges"             : self.edges,
@@ -120,12 +124,12 @@ class Model(torch.nn.Module):
             start_time = time.time()
             plt.savefig(f"{self.output_path}/DAG_before_prune/{self.epoch:04}")
             shutil.copy(f"{self.output_path}/DAG_before_prune/{self.epoch:04}.png", f"{self.output_path}/DAG_before_prune/0000_last.png")
-            if self.epoch == 1: shutil.copy(f"{self.output_path}/DAG_before_prune/{self.epoch:04}.png", "DAG_before_prune_01_first.png")  # Debug
-            shutil.copy(f"{self.output_path}/DAG_before_prune/{self.epoch:04}.png", "DAG_before_prune_02_last.png")  # Debug
+            # if self.epoch == 1: shutil.copy(f"{self.output_path}/DAG_before_prune/{self.epoch:04}.png", "DAG_before_prune_first.png")  # Debug
+            shutil.copy(f"{self.output_path}/DAG_before_prune/{self.epoch:04}.png", "DAG_before_prune_last.png")  # Debug
             print(f"cost time: {time.time()-start_time:.2f} seconds")
         else:
             os.makedirs(f"{self.output_path}/DAG_after_prune", exist_ok=True)
-            plt.title(f"DAG_after_prune (Epoch: {self.epoch})", fontsize=30)
+            plt.title(f"DAG_after_prune (Epoch: {self.epoch})", fontsize=30*max(np.log2(self.node_num)-5, 1))
             imported_plot_DAG(graph_data={
                 "node_num"          : self.node_num,
                 "edges"             : self.edges,
@@ -140,8 +144,8 @@ class Model(torch.nn.Module):
             start_time = time.time()
             plt.savefig(f"{self.output_path}/DAG_after_prune/{self.epoch:04}")
             shutil.copy(f"{self.output_path}/DAG_after_prune/{self.epoch:04}.png", f"{self.output_path}/DAG_after_prune/0000_last.png")
-            if self.epoch == 1: shutil.copy(f"{self.output_path}/DAG_after_prune/{self.epoch:04}.png", "DAG_after_prune_01_first.png")  # Debug
-            shutil.copy(f"{self.output_path}/DAG_after_prune/{self.epoch:04}.png", "DAG_after_prune_02_last.png")  # Debug
+            # if self.epoch == 1: shutil.copy(f"{self.output_path}/DAG_after_prune/{self.epoch:04}.png", "DAG_after_prune_first.png")  # Debug
+            shutil.copy(f"{self.output_path}/DAG_after_prune/{self.epoch:04}.png", "DAG_after_prune_last.png")  # Debug
             print(f"cost time: {time.time()-start_time:.2f} seconds")
         plt.close()
 
@@ -149,40 +153,32 @@ class Model(torch.nn.Module):
         os.makedirs(f"{self.output_path}/Alphas", exist_ok=True)
         base = max(np.log2(self.node_num)-3, 1)
         fig, axs = plt.subplots(1, 2, figsize=(12*base, 6*base))
-        fig.suptitle(f"Alphas (Epoch: {self.epoch})", fontsize=12*base)
-
-        # axs[0].set_title("alphas_tensor")
-        # alphas_tensor = self.alphas_tensor.cpu().detach()*self.alphas_mask
-        # alphas_tensor = torch.reshape(alphas_tensor, (self.node_num, self.node_num))
-        # alphas_tensor = alphas_tensor.numpy()
-        # sns.heatmap(alphas_tensor, annot=True, fmt=".1f", ax=axs[0], vmax=3, vmin=-3)  # , linewidths=.5
-
-        # axs[1].set_title("normalized\nalphas_tensor")
-        # alphas_tensor = self.alphas_tensor.cpu().detach()*self.alphas_mask
-        # alphas_tensor = torch.nn.functional.normalize(alphas_tensor, dim=0)
-        # alphas_tensor *= self.alphas_mask
-        # alphas_tensor = torch.reshape(alphas_tensor, (self.node_num, self.node_num))
-        # alphas_tensor = alphas_tensor.numpy()
-        # sns.heatmap(alphas_tensor, annot=True, fmt=".1f", ax=axs[1])  # , linewidths=.5
+        fig.suptitle(f"Alphas (Epoch: {self.epoch}, t_c: {self.t_c:.3f})", fontsize=12*base)
 
         axs[0].set_title("alphas", fontsize=10*base)
         alphas = torch.reshape(self.alphas.cpu().detach(), (self.node_num, self.node_num))
         alphas = alphas.numpy()
-        sns.heatmap(alphas, annot=True, fmt=".1f", ax=axs[0], vmax=1, vmin=0)
+        if self.node_num <= 64:
+            sns.heatmap(alphas, annot=True, fmt=".1f", ax=axs[0], vmax=1, vmin=0)
+        else:
+            sns.heatmap(alphas, fmt=".1f", ax=axs[1], vmax=1, vmin=0)
 
         axs[1].set_title("selected alphas", fontsize=10*base)
         alphas_masked = np.zeros((self.node_num, self.node_num))
         for edge in self.edges: alphas_masked[edge[0]][edge[1]] = 1
         alphas_masked = alphas*alphas_masked
-        sns.heatmap(alphas_masked, annot=True, fmt=".1f", ax=axs[1], vmax=1, vmin=0)
+        if self.node_num <= 64:
+            sns.heatmap(alphas_masked, annot=True, fmt=".1f", ax=axs[1], vmax=1, vmin=0)
+        else:
+            sns.heatmap(alphas_masked, fmt=".1f", ax=axs[1], vmax=1, vmin=0)
 
         plt.tight_layout()
         print("Saving Alphas... ", end='', flush=True)
         start_time = time.time()
         plt.savefig(f"{self.output_path}/Alphas/{self.epoch:04}")
         shutil.copy(f"{self.output_path}/Alphas/{self.epoch:04}.png", f"{self.output_path}/Alphas/0000_last.png")
-        if self.epoch == 1: shutil.copy(f"{self.output_path}/Alphas/{self.epoch:04}.png", "Alphas_01_first.png")  # Debug
-        shutil.copy(f"{self.output_path}/Alphas/{self.epoch:04}.png", "Alphas_02_last.png")  # Debug
+        # if self.epoch == 1: shutil.copy(f"{self.output_path}/Alphas/{self.epoch:04}.png", "Alphas_first.png")  # Debug
+        shutil.copy(f"{self.output_path}/Alphas/{self.epoch:04}.png", "Alphas_last.png")  # Debug
         print(f"cost time: {time.time()-start_time:.2f} seconds")
         plt.close()
 
@@ -192,7 +188,7 @@ class Model(torch.nn.Module):
         self.link_edges()
         if plot_dag: self.plot_DAG()
         try:
-            self.prune_edges(prune_sources=False, prune_sinks=True)
+            self.prune_edges(prune_sources=True, prune_sinks=True)
             if plot_dag: self.plot_DAG()
         except:
             self.plot_DAG()
@@ -288,7 +284,6 @@ class Model(torch.nn.Module):
                     edges_tmp = list(filter(lambda e: e[1]!=sink_id, edges_tmp))
                     pbar.update(1)
                 # print(self.get_sink_ids(edges_tmp), end=' ')  # Debug
-            pbar.set_description("Pruning sinks")
             # pbar.close()
             # print('')
         self.pruned = True
@@ -338,37 +333,57 @@ class Model(torch.nn.Module):
         assert source_id == self.node_num-1
         return self.nodes[source_id].output  # type: ignore
 
+    """ Add from DARTS """
+    def new(self):
+        model_new = Model(self.node_num, self.node_depth, self.t_c, self.max_n_c, self.min_n_c,
+                          self.criterion, self.output_path, self.device).to(self.device)
+        for x, y in zip([ model_new.alphas ], [ self.alphas ]):
+            x.data.copy_(y.data)
+        return model_new
+
+    def _loss(self, input, target):
+        logits = self(input)
+        return self.criterion(logits, target)
+
 
 class Node(torch.nn.Module):
     def __init__(self, node_depth, first=False, last=False):
         super(Node, self).__init__()
         self.last = last
+        activation_function = torch.nn.GELU()
+        # activation_function = torch.nn.SiLU()
         if first:
             self.layers = torch.nn.ModuleList([
-                SigmoidConv2d(3, node_depth, 3, padding=1, bias=False),
+                torch.nn.Conv2d(3, node_depth, 3, padding=1),  # bias=False),
             ])
         elif last:
             self.layers = torch.nn.ModuleList([
-                # torch.nn.ReLU(),
-                # torch.nn.BatchNorm2d(node_depth),
-                SigmoidConv2d(node_depth, 32, 3, stride=2, padding=1, bias=False),
-                # torch.nn.ReLU(),
-                # torch.nn.BatchNorm2d(32),
-                SigmoidConv2d(32, 8, 3, stride=2, padding=1, bias=False),
-                # torch.nn.ReLU(),
-                # torch.nn.BatchNorm2d(8),
+                activation_function,
+                torch.nn.BatchNorm2d(node_depth),
+                # ---
+                torch.nn.Conv2d(node_depth, 32, 3, stride=2, padding=1),  # bias=False),
+                activation_function,
+                torch.nn.BatchNorm2d(32),
+                # ---
+                torch.nn.Conv2d(32, 8, 3, stride=2, padding=1),  # bias=False),
+                activation_function,
+                torch.nn.BatchNorm2d(8),
+                # ---
                 torch.nn.Flatten(),
-                SigmoidLinear(8*8*8, 128, bias=False),
-                # torch.nn.ReLU(),
-                # torch.nn.BatchNorm1d(128),
-                SigmoidLinear(128, 10, bias=False),
+                torch.nn.Linear(8*8*8, 128),  # bias=False),
+                activation_function,
+                torch.nn.BatchNorm1d(128),
+                # ---
+                torch.nn.Linear(128, 10),  # bias=False),
+                activation_function,
                 torch.nn.Softmax(dim=-1),
             ])
         else:
             self.layers = torch.nn.ModuleList([
-                # torch.nn.ReLU(),
-                # torch.nn.BatchNorm2d(node_depth),
-                SigmoidConv2d(node_depth, node_depth, 1, bias=False),
+                activation_function,
+                torch.nn.BatchNorm2d(node_depth),
+                # ---
+                torch.nn.Conv2d(node_depth, node_depth, 1),  # bias=False),
             ])
         self.forwarded = False
 
@@ -397,7 +412,7 @@ class SigmoidConv2d(torch.nn.Module):
         self.conv2d = torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias)
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
-        weight = torch.nn.Sigmoid()(self.conv2d.weight) / (self.kernel_size**2*self.in_channels)
+        weight = torch.nn.Sigmoid()(self.conv2d.weight)  # / (self.kernel_size**2*self.in_channels)
         bias = torch.nn.Sigmoid()(self.conv2d.bias) if self.bias else self.conv2d.bias
         return self.conv2d._conv_forward(input, weight, bias)
 
@@ -410,7 +425,7 @@ class SigmoidLinear(torch.nn.Module):
         self.linear = torch.nn.Linear(in_features, out_features, bias=bias)
 
     def forward(self, input:torch.Tensor) -> torch.Tensor:
-        weight = torch.nn.Sigmoid()(self.linear.weight) / self.in_features
+        weight = torch.nn.Sigmoid()(self.linear.weight)  # / self.in_features
         bias = torch.nn.Sigmoid()(self.linear.bias) if self.bias else self.linear.bias
         return torch.nn.functional.linear(input, weight, bias)
 
